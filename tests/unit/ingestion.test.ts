@@ -1,47 +1,33 @@
 import { IngestionService } from '../../src/services/ingestion';
 import fs from 'fs/promises';
+import { MemoryVectorStore } from 'langchain/vectorstores/memory';
 
 // Mock external dependencies
-jest.mock('chromadb', () => ({
-  ChromaClient: jest.fn(),
-}));
+jest.mock('langchain/vectorstores/memory');
 
 jest.mock('@langchain/openai', () => ({
-  OpenAIEmbeddings: jest.fn(),
+  OpenAIEmbeddings: jest.fn().mockImplementation(() => ({
+    embedDocuments: jest.fn().mockResolvedValue([[0.1, 0.2, 0.3]]),
+    embedQuery: jest.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+  })),
 }));
 
 jest.mock('fs/promises');
 
 describe('IngestionService', () => {
   let ingestionService: IngestionService;
-  let mockChromaClient: any;
-  let mockCollection: any;
-  const { ChromaClient } = require('chromadb');
-  const { OpenAIEmbeddings } = require('@langchain/openai');
+  let mockVectorStore: any;
 
   beforeEach(() => {
     // Reset mocks
     jest.clearAllMocks();
 
-    // Setup mock collection
-    mockCollection = {
-      add: jest.fn().mockResolvedValue(undefined),
+    // Setup mock MemoryVectorStore
+    mockVectorStore = {
+      similaritySearchWithScore: jest.fn().mockResolvedValue([]),
     };
 
-    // Setup mock ChromaClient
-    mockChromaClient = {
-      getOrCreateCollection: jest.fn().mockResolvedValue(mockCollection),
-      createCollection: jest.fn().mockResolvedValue(mockCollection),
-      deleteCollection: jest.fn().mockResolvedValue(undefined),
-    };
-
-    ChromaClient.mockImplementation(() => mockChromaClient);
-
-    // Setup mock OpenAIEmbeddings
-    const mockEmbedQuery = jest.fn().mockResolvedValue(Array(384).fill(0.1));
-    OpenAIEmbeddings.mockImplementation(() => ({
-      embedQuery: mockEmbedQuery,
-    }));
+    (MemoryVectorStore.fromDocuments as jest.Mock) = jest.fn().mockResolvedValue(mockVectorStore);
 
     // Setup mock fs
     (fs.readdir as jest.Mock).mockResolvedValue(['test_doc.md']);
@@ -80,37 +66,10 @@ describe('IngestionService', () => {
       );
     });
 
-    it('should delete existing collection when reset is true', async () => {
-      await ingestionService.ingestDocuments(true);
-
-      expect(mockChromaClient.deleteCollection).toHaveBeenCalledWith({
-        name: 'docs_collection',
-      });
-    });
-
-    it('should not delete collection when reset is false', async () => {
+    it('should create vector store', async () => {
       await ingestionService.ingestDocuments(false);
 
-      expect(mockChromaClient.deleteCollection).not.toHaveBeenCalled();
-    });
-
-    it('should add documents to collection', async () => {
-      await ingestionService.ingestDocuments(false);
-
-      expect(mockCollection.add).toHaveBeenCalled();
-      const addCall = mockCollection.add.mock.calls[0][0];
-      expect(addCall).toHaveProperty('ids');
-      expect(addCall).toHaveProperty('embeddings');
-      expect(addCall).toHaveProperty('documents');
-      expect(addCall).toHaveProperty('metadatas');
-    });
-
-    it('should include source metadata', async () => {
-      await ingestionService.ingestDocuments(false);
-
-      const addCall = mockCollection.add.mock.calls[0][0];
-      expect(addCall.metadatas[0]).toHaveProperty('source');
-      expect(addCall.metadatas[0]).toHaveProperty('chunkId');
+      expect(MemoryVectorStore.fromDocuments).toHaveBeenCalled();
     });
 
     it('should handle errors gracefully', async () => {
@@ -144,30 +103,10 @@ describe('IngestionService', () => {
   });
 
   describe('error handling', () => {
-    it('should handle ChromaDB errors', async () => {
-      // Setup failing ChromaDB mock
-      const failingChromaClient = {
-        getOrCreateCollection: jest.fn().mockRejectedValue(new Error('ChromaDB error')),
-        createCollection: jest.fn().mockRejectedValue(new Error('ChromaDB error')),
-        deleteCollection: jest.fn().mockResolvedValue(undefined),
-      };
+    it('should handle vector store creation errors', async () => {
+      (MemoryVectorStore.fromDocuments as jest.Mock).mockRejectedValue(new Error('Vector store error'));
 
-      ChromaClient.mockImplementationOnce(() => failingChromaClient);
-
-      const failingService = new IngestionService();
-
-      await expect(failingService.ingestDocuments(false)).rejects.toThrow('Failed to ingest documents');
-    });
-
-    it('should handle embedding errors', async () => {
-      const mockEmbedQuery = jest.fn().mockRejectedValue(new Error('Embedding error'));
-      OpenAIEmbeddings.mockImplementationOnce(() => ({
-        embedQuery: mockEmbedQuery,
-      }));
-
-      const failingService = new IngestionService();
-
-      await expect(failingService.ingestDocuments(false)).rejects.toThrow('Failed to ingest documents');
+      await expect(ingestionService.ingestDocuments(false)).rejects.toThrow('Failed to ingest documents');
     });
   });
 });

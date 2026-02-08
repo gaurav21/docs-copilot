@@ -1,6 +1,7 @@
 export interface HealthResponse {
   status: string;
   timestamp: string;
+  requestId: string;
 }
 
 export interface IngestRequest {
@@ -12,6 +13,7 @@ export interface IngestResponse {
   message: string;
   documentsProcessed: number;
   chunksCreated: number;
+  requestId: string;
 }
 
 export interface ChatRequest {
@@ -29,11 +31,13 @@ export interface ChatResponse {
   answer: string;
   citations: Citation[];
   abstained?: boolean;
+  requestId: string;
 }
 
 export interface ErrorResponse {
   error: string;
   message: string;
+  requestId: string;
 }
 
 export interface RetrievalResult {

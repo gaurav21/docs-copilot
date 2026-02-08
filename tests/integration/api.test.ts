@@ -28,11 +28,11 @@ const mockExecute = jest.fn().mockResolvedValue({
   ],
 });
 
-(IngestionService as jest.Mock).mockImplementation(() => ({
+(IngestionService as unknown as jest.Mock).mockImplementation(() => ({
   ingestDocuments: mockIngestDocuments,
 }));
 
-(RAGWorkflow as jest.Mock).mockImplementation(() => ({
+(RAGWorkflow as unknown as jest.Mock).mockImplementation(() => ({
   execute: mockExecute,
 }));
 
@@ -55,6 +55,8 @@ describe('API Endpoints', () => {
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('status', 'healthy');
       expect(response.body).toHaveProperty('timestamp');
+      expect(response.body).toHaveProperty('requestId');
+      expect(typeof response.body.requestId).toBe('string');
     });
 
     it('should return valid timestamp', async () => {
@@ -83,6 +85,8 @@ describe('API Endpoints', () => {
       expect(response.body).toHaveProperty('message');
       expect(response.body).toHaveProperty('documentsProcessed');
       expect(response.body).toHaveProperty('chunksCreated');
+      expect(response.body).toHaveProperty('requestId');
+      expect(typeof response.body.requestId).toBe('string');
     });
 
     it('should pass reset parameter to service', async () => {
@@ -114,6 +118,7 @@ describe('API Endpoints', () => {
       expect(response.status).toBe(500);
       expect(response.body).toHaveProperty('error', 'IngestError');
       expect(response.body).toHaveProperty('message');
+      expect(response.body).toHaveProperty('requestId');
     });
 
     it('should have correct content type', async () => {
@@ -130,6 +135,44 @@ describe('API Endpoints', () => {
 
       expect(response.status).toBe(200);
     });
+
+    it('should validate docs folder exists', async () => {
+      // Mock fs to simulate missing folder
+      const fs = require('fs');
+      const originalExistsSync = fs.existsSync;
+      fs.existsSync = jest.fn().mockReturnValue(false);
+
+      const response = await request(app).post('/ingest').send({});
+
+      expect(response.status).toBe(400);
+      expect(response.body).toHaveProperty('error', 'ValidationError');
+      expect(response.body.message).toContain('not found');
+      expect(response.body).toHaveProperty('requestId');
+
+      // Restore original
+      fs.existsSync = originalExistsSync;
+    });
+
+    it('should validate docs folder is not empty', async () => {
+      // Mock fs to simulate empty folder
+      const fs = require('fs');
+      const originalExistsSync = fs.existsSync;
+      const originalReaddirSync = fs.readdirSync;
+
+      fs.existsSync = jest.fn().mockReturnValue(true);
+      fs.readdirSync = jest.fn().mockReturnValue([]);
+
+      const response = await request(app).post('/ingest').send({});
+
+      expect(response.status).toBe(400);
+      expect(response.body).toHaveProperty('error', 'ValidationError');
+      expect(response.body.message).toContain('No markdown files');
+      expect(response.body).toHaveProperty('requestId');
+
+      // Restore original
+      fs.existsSync = originalExistsSync;
+      fs.readdirSync = originalReaddirSync;
+    });
   });
 
   describe('POST /chat', () => {
@@ -142,6 +185,8 @@ describe('API Endpoints', () => {
       expect(response.body).toHaveProperty('answer');
       expect(response.body).toHaveProperty('citations');
       expect(response.body).toHaveProperty('abstained');
+      expect(response.body).toHaveProperty('requestId');
+      expect(typeof response.body.requestId).toBe('string');
     });
 
     it('should pass question to workflow', async () => {
@@ -189,6 +234,7 @@ describe('API Endpoints', () => {
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('error', 'ValidationError');
       expect(response.body.message).toContain('required');
+      expect(response.body).toHaveProperty('requestId');
     });
 
     it('should validate question is not empty', async () => {

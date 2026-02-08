@@ -1,52 +1,36 @@
 import { RetrievalService } from '../../src/services/retrieval';
+import { IngestionService } from '../../src/services/ingestion';
 
-// Mock external dependencies
-jest.mock('chromadb', () => ({
-  ChromaClient: jest.fn(),
-}));
-
-jest.mock('@langchain/openai', () => ({
-  OpenAIEmbeddings: jest.fn(),
-}));
+// Mock the IngestionService to provide a mock vector store
+jest.mock('../../src/services/ingestion');
 
 describe('RetrievalService', () => {
   let retrievalService: RetrievalService;
-  let mockChromaClient: any;
-  let mockCollection: any;
-  const { ChromaClient } = require('chromadb');
-  const { OpenAIEmbeddings } = require('@langchain/openai');
+  let mockVectorStore: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Setup mock collection with query results
-    mockCollection = {
-      query: jest.fn().mockResolvedValue({
-        ids: [['id1', 'id2', 'id3']],
-        documents: [['Document 1 content', 'Document 2 content', 'Document 3 content']],
-        metadatas: [
-          [
-            { source: 'doc1.md', chunkId: 'doc1_chunk_0' },
-            { source: 'doc2.md', chunkId: 'doc2_chunk_0' },
-            { source: 'doc3.md', chunkId: 'doc3_chunk_0' },
-          ],
+    // Setup mock vector store with search results
+    mockVectorStore = {
+      similaritySearchWithScore: jest.fn().mockResolvedValue([
+        [
+          { pageContent: 'Document 1 content', metadata: { source: 'doc1.md', chunkId: 'doc1_chunk_0' } },
+          0.8,
         ],
-        distances: [[0.2, 0.3, 0.4]],
-      }),
+        [
+          { pageContent: 'Document 2 content', metadata: { source: 'doc2.md', chunkId: 'doc2_chunk_0' } },
+          0.7,
+        ],
+        [
+          { pageContent: 'Document 3 content', metadata: { source: 'doc3.md', chunkId: 'doc3_chunk_0' } },
+          0.6,
+        ],
+      ]),
     };
 
-    // Setup mock ChromaClient
-    mockChromaClient = {
-      getOrCreateCollection: jest.fn().mockResolvedValue(mockCollection),
-    };
-
-    ChromaClient.mockImplementation(() => mockChromaClient);
-
-    // Setup mock OpenAIEmbeddings
-    const mockEmbedQuery = jest.fn().mockResolvedValue(Array(384).fill(0.1));
-    OpenAIEmbeddings.mockImplementation(() => ({
-      embedQuery: mockEmbedQuery,
-    }));
+    // Mock IngestionService.getVectorStore to return our mock
+    (IngestionService.getVectorStore as jest.Mock) = jest.fn().mockReturnValue(mockVectorStore);
 
     retrievalService = new RetrievalService();
   });
@@ -70,10 +54,9 @@ describe('RetrievalService', () => {
       expect(results[0].metadata).toHaveProperty('chunkId');
     });
 
-    it('should convert distances to similarity scores', async () => {
+    it('should return similarity scores', async () => {
       const results = await retrievalService.retrieve('test query');
 
-      // Distance 0.2 should convert to similarity 0.8 (1 - 0.2)
       expect(results[0].score).toBe(0.8);
       expect(results[1].score).toBe(0.7);
       expect(results[2].score).toBe(0.6);
@@ -82,44 +65,21 @@ describe('RetrievalService', () => {
     it('should respect topK parameter', async () => {
       await retrievalService.retrieve('test query', 3);
 
-      expect(mockCollection.query).toHaveBeenCalledWith({
-        queryEmbeddings: expect.any(Array),
-        nResults: 3,
-      });
+      expect(mockVectorStore.similaritySearchWithScore).toHaveBeenCalledWith('test query', 3);
     });
 
     it('should use default topK from config', async () => {
       await retrievalService.retrieve('test query');
 
-      expect(mockCollection.query).toHaveBeenCalledWith({
-        queryEmbeddings: expect.any(Array),
-        nResults: 5,
-      });
+      expect(mockVectorStore.similaritySearchWithScore).toHaveBeenCalledWith('test query', 5);
     });
 
     it('should handle empty results', async () => {
-      mockCollection.query.mockResolvedValue({
-        ids: [[]],
-        documents: [[]],
-        metadatas: [[]],
-        distances: [[]],
-      });
+      mockVectorStore.similaritySearchWithScore.mockResolvedValue([]);
 
       const results = await retrievalService.retrieve('test query');
 
       expect(results).toEqual([]);
-    });
-
-    it('should handle queries with embeddings', async () => {
-      const mockEmbedQuery = jest.fn().mockResolvedValue([0.1, 0.2, 0.3]);
-      (OpenAIEmbeddings as jest.Mock).mockImplementation(() => ({
-        embedQuery: mockEmbedQuery,
-      }));
-
-      retrievalService = new RetrievalService();
-      await retrievalService.retrieve('test query');
-
-      expect(mockEmbedQuery).toHaveBeenCalledWith('test query');
     });
 
     it('should return results sorted by relevance', async () => {
@@ -148,40 +108,32 @@ describe('RetrievalService', () => {
   });
 
   describe('error handling', () => {
-    it('should handle collection not found error', async () => {
-      mockChromaClient.getOrCreateCollection.mockRejectedValue(
-        new Error('Collection not found')
+    it('should handle vector store not initialized', async () => {
+      (IngestionService.getVectorStore as jest.Mock).mockReturnValue(null);
+
+      await expect(retrievalService.retrieve('test query')).rejects.toThrow(
+        'Vector store not initialized'
       );
+    });
+
+    it('should handle search errors', async () => {
+      mockVectorStore.similaritySearchWithScore.mockRejectedValue(new Error('Search error'));
 
       await expect(retrievalService.retrieve('test query')).rejects.toThrow(
         'Failed to retrieve documents'
       );
     });
 
-    it('should handle embedding errors', async () => {
-      const mockEmbedQuery = jest
-        .fn()
-        .mockRejectedValue(new Error('Embedding error'));
-      (OpenAIEmbeddings as jest.Mock).mockImplementation(() => ({
-        embedQuery: mockEmbedQuery,
-      }));
+    it('should handle malformed results', async () => {
+      mockVectorStore.similaritySearchWithScore.mockResolvedValue([
+        [null, 0.8],
+        [{ pageContent: 'test' }, null],
+      ]);
 
-      retrievalService = new RetrievalService();
-
-      await expect(retrievalService.retrieve('test query')).rejects.toThrow();
-    });
-
-    it('should handle malformed query results', async () => {
-      mockCollection.query.mockResolvedValue({
-        ids: null,
-        documents: null,
-        metadatas: null,
-        distances: null,
-      });
-
-      const results = await retrievalService.retrieve('test query');
-
-      expect(results).toEqual([]);
+      // Should throw an error when results are malformed
+      await expect(retrievalService.retrieve('test query')).rejects.toThrow(
+        'Failed to retrieve documents'
+      );
     });
   });
 
@@ -203,19 +155,13 @@ describe('RetrievalService', () => {
     it('should handle topK of 1', async () => {
       await retrievalService.retrieve('test query', 1);
 
-      expect(mockCollection.query).toHaveBeenCalledWith({
-        queryEmbeddings: expect.any(Array),
-        nResults: 1,
-      });
+      expect(mockVectorStore.similaritySearchWithScore).toHaveBeenCalledWith('test query', 1);
     });
 
     it('should handle large topK values', async () => {
       await retrievalService.retrieve('test query', 100);
 
-      expect(mockCollection.query).toHaveBeenCalledWith({
-        queryEmbeddings: expect.any(Array),
-        nResults: 100,
-      });
+      expect(mockVectorStore.similaritySearchWithScore).toHaveBeenCalledWith('test query', 100);
     });
   });
 });

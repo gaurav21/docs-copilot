@@ -58,7 +58,14 @@ export class RAGWorkflow {
       .map((doc, idx) => `[${idx + 1}] ${doc.content}\nSource: ${doc.metadata.source} (${doc.metadata.chunkId})`)
       .join('\n\n');
 
-    const prompt = `You are a helpful documentation assistant. Answer the following question based on the provided context. Be concise and accurate. Reference the source numbers [1], [2], etc. when appropriate.
+    const prompt = `You are a documentation assistant that answers questions STRICTLY based on the provided context.
+
+RULES:
+- Answer ONLY using information from the context below
+- If the context does not contain the answer, respond with "I don't know"
+- Reference sources using [1], [2], etc. when making claims
+- Be concise and accurate
+- Include a "Citations" section at the end mapping each claim to chunk IDs
 
 Context:
 ${context}
